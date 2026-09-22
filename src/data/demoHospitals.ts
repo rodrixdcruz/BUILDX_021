@@ -146,9 +146,9 @@ export const DEMO_HOSPITALS: Hospital[] = [
     contact: '0712-2647865',
     emergencyAvailable: true,
     beds: {
-      ICU: { total: 8, available: 1 },
-      General: { total: 30, available: 5 },
-      Oxygen: { total: 6, available: 2 },
+      ICU: { total: 8, available: 0 },
+      General: { total: 30, available: 0 },
+      Oxygen: { total: 6, available: 0 },
     },
     facilities: ['24x7 Emergency', 'General Medicine', 'Minor OT'],
     sector: 'Private',

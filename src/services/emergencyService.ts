@@ -1,4 +1,75 @@
-import type { EmergencyCase, EmergencyReportInput } from '../models/types'
+import type {
+  EmergencyCase,
+  EmergencyReportInput,
+  LifecycleStage,
+  SmsFallbackMessage,
+  TriageCategory,
+  TimelineEntry,
+} from '../models/types'
+
+/**
+ * Demo triage mapping — COORDINATION AID ONLY, never clinical triage.
+ * Transparent rule derived from the reporter's chosen priority:
+ *   Emergency → CRITICAL, High → URGENT, Normal → NON_URGENT.
+ */
+export function triageFor(priority: EmergencyCase['priority']): TriageCategory {
+  if (priority === 'Emergency') return 'CRITICAL'
+  if (priority === 'High') return 'URGENT'
+  return 'NON_URGENT'
+}
+
+/** Ordered lifecycle stages for the coordination view. */
+export const LIFECYCLE_STAGES: LifecycleStage[] = [
+  'Emergency Reported',
+  'Ambulance Requested',
+  'Ambulance Assigned',
+  'Hospital Selected',
+  'Hospital Notified',
+  'Patient En Route',
+  'Arrived',
+]
+
+/**
+ * Derives the furthest lifecycle stage reached from case state.
+ * 'Patient En Route' and 'Arrived' are explicit coordinator actions
+ * stored on `caseRecord.lifecycle` and are preserved here.
+ */
+export function deriveLifecycle(c: EmergencyCase): LifecycleStage {
+  if (c.lifecycle === 'Patient En Route' || c.lifecycle === 'Arrived') return c.lifecycle
+  if (c.status === 'Closed') return 'Arrived'
+
+  let stage: LifecycleStage = 'Emergency Reported'
+  const advance = (s: LifecycleStage) => {
+    if (LIFECYCLE_STAGES.indexOf(s) > LIFECYCLE_STAGES.indexOf(stage)) stage = s
+  }
+  if (c.hospital.status !== 'Searching' || c.ambulance.status !== 'NotAssignedYet') advance('Ambulance Requested')
+  if (c.ambulance.status === 'Assigned') advance('Ambulance Assigned')
+  if (c.hospital.status === 'Selected') advance('Hospital Selected')
+  if (c.bed.status === 'Available') advance('Hospital Notified') // bed confirmed ⇒ hospital informed (demo)
+  return stage
+}
+
+/** Appends a timeline entry (pure — returns a new case object). */
+export function addTimelineEntry(
+  c: EmergencyCase,
+  key: string,
+  label: string,
+  detail?: string,
+): EmergencyCase {
+  const entry: TimelineEntry = { key, label, at: new Date().toISOString(), detail } // eslint-disable-line
+  return { ...c, timeline: [...(c.timeline ?? []), entry] }
+}
+
+/**
+ * Builds the SMS FALLBACK message for a case. DEMO ONLY — no SMS provider
+ * is integrated; this drafts text (e.g. for manual relay) and never claims
+ * a message was actually transmitted.
+ */
+export function buildSmsFallback(c: EmergencyCase): SmsFallbackMessage {
+  const triage = c.triage ?? triageFor(c.priority)
+  const text = `CASE ${c.id} | ${triage} | ${c.emergencyType} | Location: ${c.location} | Ambulance Required`
+  return { caseId: c.id, text, to: '108', channel: 'demo' }
+}
 
 const CASE_ID_KEY = 'nhg.caseCounter'
 const CASES_KEY = 'nhg.cases'
@@ -28,6 +99,11 @@ export function createEmergencyCase(input: EmergencyReportInput): EmergencyCase 
     requiredBloodGroup: input.requiredBloodGroup || undefined,
     status: 'Submitted',
     createdAt: now,
+    triage: triageFor(input.priority),
+    lifecycle: 'Emergency Reported',
+    timeline: [
+      { key: 'reported', label: 'Emergency reported', at: now, detail: input.location.trim() },
+    ],
     hospital: { status: 'Searching' },
     bed: { status: 'Checking' },
     ambulance: { status: 'NotAssignedYet', note: 'Awaiting dispatch (demo fleet).' },

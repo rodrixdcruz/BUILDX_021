@@ -1,0 +1,17 @@
+{
+  "name": "Nagpur HealthGrid",
+  "short_name": "HealthGrid",
+  "description": "Emergency Case Orchestration for Nagpur — ambulance, hospital, bed, blood and navigation workflows with offline fallback.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fa",
+  "theme_color": "#0e7c66",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

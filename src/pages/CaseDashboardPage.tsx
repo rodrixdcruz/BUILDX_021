@@ -1,13 +1,42 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import type { EmergencyCase, Hospital, GeoPoint, Ambulance } from '../models/types'
-import { getCase, saveCase, selectBestHospital } from '../services/emergencyService'
+import type { EmergencyCase, Hospital, GeoPoint, Ambulance, Facility } from '../models/types'
+import {
+  getCase,
+  saveCase,
+  selectBestHospital,
+  deriveLifecycle,
+  addTimelineEntry,
+  buildSmsFallback,
+} from '../services/emergencyService'
 import { getHospitals } from '../services/hospitalService'
 import { assignAmbulanceToCase, loadFleetState } from '../services/ambulanceService'
 import { reserveBloodForCase, searchBloodBanks } from '../services/bloodBankService'
+import { hospitalReportedCapacity, overflowAlternatives } from '../services/facilityService'
+import { queueCaseUpdate, draftSmsFallback } from '../services/connectivityService'
+import {
+  remainingSeconds,
+  formatCountdown,
+  formatClock,
+  elapsedLabel,
+  rapidResponseSteps,
+} from '../services/goldenHourService'
 import { PriorityBadge, EmptyState, DemoNotice } from '../components/ui'
 import { LocationPanel } from '../components/LocationPanel'
 import { AllocationPanel } from '../components/AllocationPanel'
+import { mapsDeepLink } from '../constants/emergency'
+import { isOnline } from '../services/connectivityService'
+
+/** Local order mirror of LIFECYCLE_STAGES for index lookups in the UI. */
+const LIFECYCLE_ORDER = [
+  'Emergency Reported',
+  'Ambulance Requested',
+  'Ambulance Assigned',
+  'Hospital Selected',
+  'Hospital Notified',
+  'Patient En Route',
+  'Arrived',
+] as const
 
 /**
  * Emergency case dashboard — the coordination heart of the MVP.
@@ -21,8 +50,17 @@ export function CaseDashboardPage() {
   const [point, setPoint] = useState<GeoPoint | null>(null)
   const [label, setLabel] = useState('')
   const [, setFleet] = useState<Ambulance[]>([])
+  const [now, setNow] = useState(Date.now())
+  const [smsDraft, setSmsDraft] = useState<string | null>(null)
+  const [smsCopied, setSmsCopied] = useState(false)
 
   const hospitals = useMemo(() => getHospitals(), [])
+
+  // Golden-hour clock tick (display only).
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [])
 
   useEffect(() => {
     const c = id ? getCase(id) : null
@@ -34,6 +72,33 @@ export function CaseDashboardPage() {
     setFleet(loadFleetState())
     if (c.locationPoint) setPoint(c.locationPoint)
   }, [id])
+
+  // Backfill lifecycle + timeline entries from case state (runs once per state change,
+  // then becomes a no-op). Keeps Commit-1/2 cases working with the new timeline.
+  useEffect(() => {
+    if (!caseRecord) return
+    const tl = caseRecord.timeline ?? []
+    const needs: Array<[string, string, string?]> = []
+    if (caseRecord.locationPoint && !tl.some((t) => t.key === 'location')) {
+      needs.push(['location', 'Location confirmed', caseRecord.location])
+    }
+    if (caseRecord.hospital.status === 'Selected' && caseRecord.hospital.hospitalName && !tl.some((t) => t.key === 'hospital-selected')) {
+      needs.push(['hospital-selected', 'Hospital selected', caseRecord.hospital.hospitalName])
+    }
+    if (caseRecord.ambulance.status === 'Assigned' && !tl.some((t) => t.key === 'ambulance-assigned')) {
+      needs.push(['ambulance-assigned', 'Ambulance assigned', caseRecord.ambulance.callSign])
+    }
+    if (caseRecord.bed.status === 'Available' && !tl.some((t) => t.key === 'hospital-notified')) {
+      needs.push(['hospital-notified', 'Hospital notified', 'Bed confirmed (demo)'])
+    }
+    const derived = deriveLifecycle(caseRecord)
+    if (needs.length === 0 && caseRecord.lifecycle === derived) return
+    let updated: EmergencyCase = caseRecord
+    for (const [key, labelText, detail] of needs) updated = addTimelineEntry(updated, key, labelText, detail)
+    updated = { ...updated, lifecycle: derived }
+    saveCase(updated)
+    setCaseRecord(updated)
+  }, [caseRecord])
 
   // Simulated coordination pipeline (demo logic, clearly labelled in UI).
   // Stage 1: hospital search — runs while the case is in 'Searching'.
@@ -148,6 +213,78 @@ export function CaseDashboardPage() {
     ? searchBloodBanks({ group: c.requiredBloodGroup, from: point, minUnits: 1 })
     : []
 
+  // --- Commit 3: golden hour, lifecycle, overflow, SMS fallback ---
+  const ghRemaining = remainingSeconds(c, now)
+  const lifecycle = deriveLifecycle(c)
+  const lifecycleIdx = LIFECYCLE_ORDER.indexOf(lifecycle)
+  const navReady = c.ambulance.status === 'Assigned' && c.hospital.status === 'Selected'
+
+  const persistUpdate = (updated: EmergencyCase) => {
+    if (isOnline()) {
+      saveCase(updated)
+    } else {
+      queueCaseUpdate(updated)
+      saveCase(updated) // offline demo: local copy + queued action for sync
+    }
+    setCaseRecord(updated)
+  }
+
+  const markStage = (stage: 'Patient En Route' | 'Arrived') => {
+    if (!caseRecord) return
+    const withStage = addTimelineEntry(
+      { ...caseRecord, lifecycle: stage },
+      stage === 'Arrived' ? 'arrived' : 'en-route',
+      stage === 'Arrived' ? 'Arrived' : 'Patient en route',
+    )
+    persistUpdate(withStage)
+  }
+
+  const selectedCapacity = selectedHospital ? hospitalReportedCapacity(selectedHospital.id) : null
+  const overflowActive =
+    selectedHospital &&
+    (c.overflow ? c.overflow.hospitalId === selectedHospital.id : selectedCapacity?.status === 'Full')
+
+  const chooseAlternative = (alt: { facility: Facility }) => {
+    if (!caseRecord || !selectedHospital) return
+    const evaluated = overflowAlternatives(selectedHospital.id, point)
+    const updated = addTimelineEntry(
+      {
+        ...caseRecord,
+        overflow: {
+          hospitalId: selectedHospital.id,
+          hospitalName: selectedHospital.name,
+          alternativeId: alt.facility.id,
+          alternativeName: alt.facility.name,
+          alternativeKind: alt.facility.kind,
+          evaluated: evaluated.length,
+          at: new Date().toISOString(),
+        },
+      },
+      'overflow-alternative',
+      'Overflow destination selected',
+      alt.facility.name,
+    )
+    persistUpdate(updated)
+  }
+
+  const prepareSms = () => {
+    if (!caseRecord) return
+    const msg = buildSmsFallback(caseRecord)
+    draftSmsFallback(msg)
+    setSmsDraft(msg.text)
+    setSmsCopied(false)
+  }
+
+  const copySms = async () => {
+    if (!smsDraft) return
+    try {
+      await navigator.clipboard.writeText(smsDraft)
+      setSmsCopied(true)
+    } catch {
+      setSmsCopied(false)
+    }
+  }
+
   return (
     <div className="page">
       <div className="section-head" style={{ marginBottom: 0 }}>
@@ -175,6 +312,83 @@ export function CaseDashboardPage() {
         </div>
         {c.description && (
           <p className="muted" style={{ marginTop: '0.8rem', marginBottom: 0 }}>📝 {c.description}</p>
+        )}
+      </div>
+
+      {/* --- Commit 3: Golden Hour (coordination aid only) --- */}
+      <div className="card gh-card" style={{ marginTop: '0.8rem' }}>
+        <div className="gh-card__main">
+          <div>
+            <h2 className="gh-card__title">⏱ GOLDEN HOUR</h2>
+            <p className="gh-card__note">
+              Demonstration &amp; coordination aid — elapsed coordination time since reporting. It does not imply or
+              guarantee any medical outcome.
+            </p>
+          </div>
+          <div className={`gh-count ${ghRemaining === 0 ? 'gh-count--elapsed' : ''}`} role="timer" aria-label="Golden hour countdown">
+            {formatCountdown(ghRemaining)}
+          </div>
+        </div>
+        <ol className="gh-steps">
+          {rapidResponseSteps(c).map((s) => (
+            <li key={s.label} className={s.at ? 'done' : ''}>
+              <span className="gh-steps__clock">{s.at ? formatClock(s.at) : '--:--'}</span>
+              <span className="gh-steps__label">{s.label}</span>
+              <span className="gh-steps__elapsed faint">{s.at ? `+${elapsedLabel(s.at, new Date(c.createdAt).getTime())}` : 'pending'}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* --- Commit 3: Case lifecycle --- */}
+      <h2 style={{ marginTop: '1.4rem' }}>Case lifecycle</h2>
+      <div className="lifecycle" role="list" aria-label="Case lifecycle">
+        {LIFECYCLE_ORDER.map((stage, i) => {
+          const state = i < lifecycleIdx ? 'done' : i === lifecycleIdx ? 'current' : 'todo'
+          return (
+            <div key={stage} role="listitem" className={`lifecycle__stage lifecycle__stage--${state}`}>
+              <span className="lifecycle__dot" aria-hidden="true" />
+              <span className="lifecycle__label">{stage}</span>
+            </div>
+          )
+        })}
+      </div>
+      {navReady && lifecycleIdx < LIFECYCLE_ORDER.indexOf('Patient En Route') && (
+        <div className="lifecycle__actions">
+          <button type="button" className="btn btn--primary btn--sm" onClick={() => markStage('Patient En Route')}>
+            Mark Patient En Route
+          </button>
+        </div>
+      )}
+      {lifecycle === 'Patient En Route' && (
+        <div className="lifecycle__actions">
+          <button type="button" className="btn btn--primary btn--sm" onClick={() => markStage('Arrived')}>
+            Mark Arrived
+          </button>
+        </div>
+      )}
+
+      {/* --- Commit 3: SMS fallback (DEMO — never transmitted) --- */}
+      <div className="card sms-card" style={{ marginTop: '1rem' }}>
+        <div className="sms-card__row">
+          <div>
+            <h3 style={{ marginBottom: '0.15rem' }}>SEND SMS FALLBACK</h3>
+            <p className="faint" style={{ margin: 0 }}>
+              SMS FALLBACK — DEMO. No SMS provider is integrated; nothing is transmitted. Drafts a relayable summary
+              (e.g. for the 112/108 helpline) when the network is down.
+            </p>
+          </div>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={prepareSms}>
+            Generate draft
+          </button>
+        </div>
+        {smsDraft && (
+          <div className="sms-card__preview">
+            <code>{smsDraft}</code>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={copySms}>
+              {smsCopied ? 'Copied ✓' : 'Copy text'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -267,12 +481,36 @@ export function CaseDashboardPage() {
           </div>
         </section>
 
-        {/* 5. Navigation — Commit 3 */}
-        <section className="step step--todo">
+        {/* 5. Navigation — Commit 3: estimated route via Google Maps deep link */}
+        <section className={`step step--${navReady ? 'done' : 'todo'}`}>
           <div className="step__icon" aria-hidden="true">🧭</div>
           <div className="step__body">
-            <h3>Navigation <span className="badge badge--neutral">Not Assigned Yet</span></h3>
-            <p>{c.navigation.note}</p>
+            <h3>
+              Navigation{' '}
+              <span className={`badge ${navReady ? 'badge--ok' : 'badge--neutral'}`}>
+                {navReady ? 'Estimated route ready' : 'Not Assigned Yet'}
+              </span>
+            </h3>
+            {navReady && selectedHospital ? (
+              <>
+                <p>
+                  ESTIMATED ROUTE — {c.location} → {selectedHospital.name}. Straight-line demo estimate; no live
+                  traffic data.
+                </p>
+                <div className="step__link">
+                  <a
+                    className="btn btn--sm btn--ghost"
+                    href={mapsDeepLink(selectedHospital.location, selectedHospital.name)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open route in Google Maps ↗
+                  </a>
+                </div>
+              </>
+            ) : (
+              <p>Available once an ambulance is assigned and a hospital selected.</p>
+            )}
           </div>
         </section>
       </div>
@@ -293,6 +531,58 @@ export function CaseDashboardPage() {
       <div className="section">
         <AllocationPanel caseRecord={c} />
       </div>
+
+      {/* --- Commit 3: Hospital Overflow Mode --- */}
+      {selectedHospital && overflowActive && (
+        <div className="section">
+          <div className="card overflow-banner">
+            <h2 style={{ marginBottom: '0.15rem' }}>
+              🏥 HOSPITAL FULL — {selectedHospital.name}
+            </h2>
+            <p className="muted" style={{ marginBottom: '0.6rem' }}>
+              Reported capacity is FULL (demo/reported data). It is excluded from destination recommendations —
+              alternatives from the partner network are listed below, ranked by reported capacity, emergency
+              capability, distance (estimated route) and current load.
+            </p>
+            {c.overflow?.alternativeName && (
+              <p className="overflow-banner__picked">
+                Selected alternative: <strong>{c.overflow.alternativeName}</strong> ({c.overflow.alternativeKind}) ·
+                evaluated {c.overflow.evaluated} facilities
+              </p>
+            )}
+            <ul className="overflow-list">
+              {overflowAlternatives(selectedHospital.id, point).slice(0, 4).map((alt) => (
+                <li key={alt.facility.id}>
+                  <div className="overflow-list__row">
+                    <div>
+                      <strong>{alt.facility.name}</strong>{' '}
+                      <span className={`chip ${alt.facility.reportedCapacity === 'Available' ? 'chip--ok' : 'chip--warn'}`}>
+                        {alt.facility.reportedCapacity}
+                      </span>{' '}
+                      <span className="faint">
+                        {alt.distanceText ?? alt.facility.area} · {alt.facility.kind.replace('-', ' ')} · load {alt.facility.loadPercent}%
+                      </span>
+                    </div>
+                    {(!c.overflow || c.overflow.alternativeId !== alt.facility.id) && (
+                      <button type="button" className="btn btn--ghost btn--sm" onClick={() => chooseAlternative(alt)}>
+                        Select
+                      </button>
+                    )}
+                    {c.overflow?.alternativeId === alt.facility.id && <span className="chip chip--info">Selected</span>}
+                  </div>
+                  <details className="surge-case__why">
+                    <summary>Why recommended?</summary>
+                    <ul>{alt.reasons.map((r, i) => <li key={i}>{r.label}</li>)}</ul>
+                  </details>
+                </li>
+              ))}
+            </ul>
+            <p className="faint" style={{ marginBottom: 0 }}>
+              Demo/report-based availability — always confirm by phone before diverting.
+            </p>
+          </div>
+        </div>
+      )}
 
       {c.requiredBloodGroup && (
         <div className="section">

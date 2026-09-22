@@ -16,6 +16,7 @@ export function Header() {
           <Link to="/hospitals">Hospitals</Link>
           <Link to="/emergency/new">Report Emergency</Link>
           <Link to="/cases">My Cases</Link>
+          <Link to="/surge">Surge</Link>
         </nav>
         <Link to="/emergency/new" className="header-emergency">
           <span aria-hidden="true">🚨</span> Emergency
@@ -39,9 +40,10 @@ export function Footer() {
       </div>
       <div className="site-footer__inner" style={{ paddingTop: 0 }}>
         <span className="faint">
-          Commit 1 — MVP foundation: emergency reporting, hospital discovery, case tracking.
+          Emergency Case Orchestration: reporting · triage buckets · ambulance · hospital &amp; overflow · blood ·
+          golden hour · offline fallback.
         </span>
-        <span className="faint">Ambulance · Blood bank · AI assistant — coming in later commits.</span>
+        <span className="faint">All availability data is demo/simulated. No real-time feeds are integrated.</span>
       </div>
     </footer>
   )

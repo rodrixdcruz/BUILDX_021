@@ -44,6 +44,47 @@ export interface Hospital {
   sector: 'Government' | 'Private' | 'Trust'
 }
 
+/** Extra facility descriptors for the demo partner network (Commit 3).
+ *  Availability here is REPORTED / SIMULATED — never real-time. */
+export interface Facility {
+  id: string
+  name: string
+  kind: FacilityKind
+  area: string
+  location: GeoPoint
+  contact?: string
+  /** Demo reported status snapshot — not live. */
+  reportedCapacity: 'Available' | 'Limited' | 'Full'
+  /** Can the facility receive an emergency ambulance handover right now (demo)? */
+  emergencyCapability: boolean
+  /** Current demo allocation load, 0-100. */
+  loadPercent: number
+  /** Optional demo stock for camps/centres. */
+  bedsTotal?: number
+  bedsAvailable?: number
+}
+
+export interface SurgeStats {
+  total: number
+  critical: number
+  urgent: number
+  nonUrgent: number
+  pending: number
+  ambulancesAvailable: number
+  ambulancesAssigned: number
+  hospitalsAvailable: number
+  hospitalsFull: number
+}
+
+/** SMS fallback message for offline/demo use — never actually transmitted. */
+export interface SmsFallbackMessage {
+  caseId: string
+  text: string
+  to: string
+  /** Always 'demo' — no SMS provider is integrated. */
+  channel: 'demo'
+}
+
 // ---------------------------------------------------------------------------
 // Emergency cases
 // ---------------------------------------------------------------------------
@@ -59,6 +100,35 @@ export type EmergencyType =
 export type EmergencyPriority = 'Emergency' | 'High' | 'Normal'
 
 export type CaseStatus = 'Submitted' | 'Hospital Selected' | 'Bed Confirmed' | 'Closed'
+
+/** Coordination lifecycle for the golden-hour view (Commit 3).
+ *  Derived from case state, except the final two, which are explicit. */
+export type LifecycleStage =
+  | 'Emergency Reported'
+  | 'Ambulance Requested'
+  | 'Ambulance Assigned'
+  | 'Hospital Selected'
+  | 'Hospital Notified'
+  | 'Patient En Route'
+  | 'Arrived'
+
+/** One timestamped entry on the case timeline. */
+export interface TimelineEntry {
+  /** Stable machine key, e.g. 'reported', 'ambulance-assigned'. */
+  key: string
+  /** UI label, e.g. 'Emergency reported'. */
+  label: string
+  /** ISO timestamp of when the stage was reached. */
+  at: string
+  /** Short demo note, e.g. 'Nagpur-1 (ALS)'. */
+  detail?: string
+}
+
+/** Commit 3 demo triage category (surge coordination only, NOT clinical). */
+export type TriageCategory = 'CRITICAL' | 'URGENT' | 'NON_URGENT'
+
+/** Facility kind for overflow alternatives (demo network, Commit 3). */
+export type FacilityKind = 'hospital' | 'healthcare-centre' | 'emergency-camp'
 
 export type HospitalMatchStatus = 'Searching' | 'Selected' | 'Unavailable'
 export type BedMatchStatus = 'Checking' | 'Available' | 'Unavailable'
@@ -189,6 +259,28 @@ export interface EmergencyCase {
     note?: string
   }
   navigation: { status: ServiceSlot; note: string }
+
+  // --- Commit 3: lifecycle, timeline, triage, overflow, comms ---
+  /** Derived coordination lifecycle stage; explicit beyond 'Hospital Notified'. */
+  lifecycle?: LifecycleStage
+  /** Timestamped case timeline (append-only). */
+  timeline?: TimelineEntry[]
+  /** Demo triage category assigned at creation (coordination aid only). */
+  triage?: TriageCategory
+  /** Set when the selected hospital reports FULL — alternatives were evaluated. */
+  overflow?: {
+    /** Hospital id that reported full capacity. */
+    hospitalId: string
+    hospitalName: string
+    /** Deterministically re-matched facility id. */
+    alternativeId?: string
+    alternativeName?: string
+    alternativeKind?: FacilityKind
+    evaluated: number
+    at: string
+  }
+  /** SMS fallback message drafted for the case (demo — never transmitted). */
+  smsFallback?: SmsFallbackMessage
 }
 
 // ---------------------------------------------------------------------------
