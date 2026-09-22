@@ -25,12 +25,13 @@ export function createEmergencyCase(input: EmergencyReportInput): EmergencyCase 
     locationPoint: input.locationPoint,
     description: input.description?.trim() || undefined,
     priority: input.priority,
+    requiredBloodGroup: input.requiredBloodGroup || undefined,
     status: 'Submitted',
     createdAt: now,
     hospital: { status: 'Searching' },
     bed: { status: 'Checking' },
-    ambulance: { status: 'NotAssignedYet', note: 'Coming in a later commit' },
-    blood: { status: 'NotAssignedYet', note: 'Coming in a later commit' },
+    ambulance: { status: 'NotAssignedYet', note: 'Awaiting dispatch (demo fleet).' },
+    blood: { status: 'NotAssignedYet', note: 'Blood coordination begins after hospital matching.' },
     navigation: { status: 'NotAssignedYet', note: 'Coming in a later commit' },
   }
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import type { EmergencyReportInput } from '../models/types'
+import type { EmergencyReportInput, BloodGroup } from '../models/types'
 import { EMERGENCY_TYPES, EMERGENCY_PRIORITIES } from '../constants/emergency'
+import { ALL_BLOOD_GROUPS } from '../services/bloodBankService'
 import { createEmergencyCase, saveCase } from '../services/emergencyService'
 import { locateBrowser, LocationError } from '../services/locationService'
 import { DemoNotice } from '../components/ui'
@@ -216,6 +217,27 @@ export function EmergencyFormPage({ onCaseCreated }: { onCaseCreated: (id: strin
             maxLength={500}
           />
           <p className="field-hint">{(form.description ?? '').length}/500 characters</p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="bloodGroup">
+            Required blood group <span className="optional">(optional)</span>
+          </label>
+          <select
+            id="bloodGroup"
+            value={form.requiredBloodGroup ?? ''}
+            onChange={(e) =>
+              setField('requiredBloodGroup', e.target.value as BloodGroup | '')
+            }
+          >
+            <option value="">Not known / not needed</option>
+            {ALL_BLOOD_GROUPS.map((g) => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+          <p className="field-hint">
+            Fill only if the patient&apos;s group is already known — used for blood-bank coordination.
+          </p>
         </div>
 
         <div className="field">

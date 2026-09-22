@@ -64,6 +64,83 @@ export type HospitalMatchStatus = 'Searching' | 'Selected' | 'Unavailable'
 export type BedMatchStatus = 'Checking' | 'Available' | 'Unavailable'
 export type ServiceSlot = 'NotAssignedYet' | 'Assigned'
 
+// ---------------------------------------------------------------------------
+// Ambulances (Commit 2)
+// ---------------------------------------------------------------------------
+
+/** Fleet status of a demo ambulance unit. */
+export type AmbulanceStatus = 'Available' | 'Assigned' | 'Busy' | 'Offline'
+
+/** Operational class of the vehicle (descriptive demo data, not a medical claim). */
+export type AmbulanceVehicleType = 'ALS' | 'BLS' | 'PTV'
+
+export interface Ambulance {
+  id: string
+  callSign: string
+  vehicleType: AmbulanceVehicleType
+  contact: string
+  baseArea: string
+  location: GeoPoint
+  status: AmbulanceStatus
+  /** Set when Assigned/Busy — the demo case this unit is attached to. */
+  assignedCaseId?: string
+}
+
+/** Status of the ambulance step on an emergency case. */
+export type AmbulanceStepStatus = 'NotAssignedYet' | 'Searching' | 'Assigned' | 'Unavailable'
+
+// ---------------------------------------------------------------------------
+// Blood banks (Commit 2)
+// ---------------------------------------------------------------------------
+
+export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-'
+
+export interface BloodGroupStock {
+  group: BloodGroup
+  units: number
+}
+
+export interface BloodBank {
+  id: string
+  name: string
+  area: string
+  address: string
+  location: GeoPoint
+  contact: string
+  hours: string
+  stock: BloodGroupStock[]
+}
+
+/** Status of the blood step on an emergency case. */
+export type BloodStepStatus = 'NotAssignedYet' | 'Checking' | 'Reserved' | 'Unavailable'
+
+// ---------------------------------------------------------------------------
+// Resource allocation (Commit 2)
+// ---------------------------------------------------------------------------
+
+/** One explainable, human-readable reason behind an allocation decision. */
+export interface AllocationReason {
+  /** Short machine-stable key, e.g. 'nearest-unit'. */
+  key: string
+  label: string
+}
+
+export interface ResourceDecision {
+  resourceType: 'ambulance' | 'bloodBank'
+  resourceId: string
+  resourceName: string
+  score: number
+  reasons: AllocationReason[]
+}
+
+/** Deterministic, explainable coordination plan for one case. */
+export interface AllocationPlan {
+  /** Coordination order only — priority never implies clinical urgency. */
+  order: Array<'ambulance' | 'hospital' | 'bed'>
+  orderReason: string
+  ambulance?: ResourceDecision
+}
+
 /**
  * The single source of truth for one emergency report.
  * Later commits attach ambulance / blood / navigation / comms
@@ -81,6 +158,8 @@ export interface EmergencyCase {
   priority: EmergencyPriority
   status: CaseStatus
   createdAt: string // ISO timestamp
+  /** Required blood group if the reporter knows it (optional, no inference). */
+  requiredBloodGroup?: BloodGroup
 
   // --- Coordination workflow (populated progressively) ---
   hospital: {
@@ -94,8 +173,21 @@ export interface EmergencyCase {
     category?: BedCategory
     note?: string
   }
-  ambulance: { status: ServiceSlot; note: string }
-  blood: { status: ServiceSlot; note: string }
+  ambulance: {
+    status: AmbulanceStepStatus
+    ambulanceId?: string
+    callSign?: string
+    vehicleType?: AmbulanceVehicleType
+    note?: string
+  }
+  blood: {
+    status: BloodStepStatus
+    bloodBankId?: string
+    bloodBankName?: string
+    bloodGroup?: BloodGroup
+    units?: number
+    note?: string
+  }
   navigation: { status: ServiceSlot; note: string }
 }
 
@@ -112,6 +204,8 @@ export interface EmergencyReportInput {
   locationPoint?: GeoPoint
   description?: string
   priority: EmergencyPriority
+  /** Optional — only when the reporter already knows the patient's group. */
+  requiredBloodGroup?: BloodGroup | ''
 }
 
 // ---------------------------------------------------------------------------

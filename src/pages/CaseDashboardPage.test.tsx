@@ -6,7 +6,7 @@ import { createEmergencyCase, saveCase } from '../services/emergencyService'
 import { DEMO_HOSPITALS } from '../data/demoHospitals'
 
 function renderAt(path: string) {
-  return render(
+  const utils = render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/cases/:id" element={<CaseDashboardPage />} />
@@ -14,6 +14,10 @@ function renderAt(path: string) {
       </Routes>
     </MemoryRouter>,
   )
+  /** Workflow step titles, scoped so allocation-panel text can't interfere. */
+  const stepTitles = () =>
+    [...utils.container.querySelectorAll('.step h3')].map((h) => h.textContent?.replace(/\s+/g, ' ').trim())
+  return { ...utils, stepTitles }
 }
 
 describe('CaseDashboardPage', () => {
@@ -29,15 +33,19 @@ describe('CaseDashboardPage', () => {
       priority: 'High',
     })
     saveCase(c)
-    renderAt(`/cases/${c.id}`)
+    const { stepTitles } = renderAt(`/cases/${c.id}`)
 
     expect(screen.getByText(`CASE #${c.id}`)).toBeInTheDocument()
     expect(screen.getAllByText('Patient', { selector: 'span' }).length).toBeGreaterThan(0)
     expect(screen.getByText(/Test Patient/)).toBeInTheDocument()
-    expect(screen.getAllByText(/Not Assigned Yet/i)).toHaveLength(3) // ambulance, blood, navigation
-    expect(screen.getByText(/Ambulance/i)).toBeInTheDocument()
-    expect(screen.getByText(/Blood/i)).toBeInTheDocument()
-    expect(screen.getByText(/Navigation/i)).toBeInTheDocument()
+
+    const titles = stepTitles()
+    expect(titles).toHaveLength(5)
+    expect(titles[0]).toMatch(/^Hospital/)
+    expect(titles[1]).toMatch(/^Bed/)
+    expect(titles[2]).toMatch(/^Ambulance Not Assigned Yet$/)
+    expect(titles[3]).toMatch(/^Blood Not Assigned Yet$/)
+    expect(titles[4]).toMatch(/^Navigation Not Assigned Yet$/)
   })
 
   it('progresses to a selected hospital with a bed after the simulated search', async () => {
@@ -53,19 +61,21 @@ describe('CaseDashboardPage', () => {
     saveCase(c)
     renderAt(`/cases/${c.id}`)
 
+    // Wait on persisted state — generic text like "Selected"/"Available" also
+    // appears in the map legend and allocation panel, so DOM matching is unreliable.
     await waitFor(
-      () => expect(screen.getAllByText(/Selected/i).length).toBeGreaterThan(0),
-      { timeout: 4000 },
+      () => {
+        const saved = JSON.parse(window.localStorage.getItem('nhg.cases')!)[0]
+        expect(saved.hospital.status).toBe('Selected')
+        expect(saved.bed.status).toBe('Available')
+      },
+      { timeout: 6000 },
     )
-    await waitFor(() => expect(screen.getAllByText(/Available/i).length).toBeGreaterThan(0), {
-      timeout: 4000,
-    })
 
     const saved = JSON.parse(window.localStorage.getItem('nhg.cases')!)[0]
-    expect(saved.hospital.status).toBe('Selected')
     expect(saved.hospital.hospitalId).toBeTruthy()
     expect(DEMO_HOSPITALS.some((h) => h.id === saved.hospital.hospitalId)).toBe(true)
-    expect(saved.bed.status).toBe('Available')
+    expect(screen.getByText(/Why these resources?/i)).toBeInTheDocument()
   }, 10000)
 
   it('renders a friendly not-found state for unknown ids', () => {

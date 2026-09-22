@@ -27,6 +27,13 @@ India call **112** / **108**.
   marked "Not Assigned Yet" for later commits.
 - **Location panel** — schematic map (no paid API), patient location, hospital pins, straight-line
   distances, "Use my location" (graceful fallback to manual entry), Google Maps deep links.
+- **Ambulance coordination (Commit 2)** — demo Nagpur fleet with Available/Assigned/Busy/Offline
+  states, deterministic matching (availability, ALS-for-Emergency, proximity), assignment + ETA
+  persisted with the case.
+- **Blood-bank availability (Commit 2)** — demo Nagpur blood banks with per-group stock, search by
+  blood group / units / distance, deterministic selection and simulated reservation.
+- **Resource allocation (Commit 2)** — deterministic, explainable coordination: priority affects
+  ORDER only (no clinical advice), with a "Why these resources?" panel on the dashboard.
 
 ## Tech stack
 
@@ -57,19 +64,20 @@ npm run dev        # http://localhost:5173
 
 ```
 src/
-├── components/     # Reusable UI (Header, HospitalCard, LocationPanel, ui primitives)
+├── components/     # Reusable UI (Header, HospitalCard, LocationPanel, AllocationPanel, ui primitives)
 ├── constants/      # Emergency types, priorities, Nagpur areas, map helpers
-├── data/           # DEMO hospital dataset (swap with a real feed later)
-├── models/         # Domain types — the contract Commit 2/3 will extend
+├── data/           # DEMO datasets: hospitals, ambulances, blood banks (swap with real feeds later)
+├── models/         # Domain types — the contract Commit 3 will extend
 ├── pages/          # Route pages (home, form, confirmation, hospitals, detail, cases, dashboard)
-├── services/       # emergencyService, hospitalService, locationService (+ tests)
+├── services/       # emergency, hospital, location, ambulance, bloodBank, resourceAllocation (+ tests)
 ├── styles.css      # Design system
 └── test/           # Vitest setup
 ```
 
 ## Roadmap
 
-- **Commit 2:** ambulance coordination, blood-bank availability, emergency resource allocation —
-  new services + dashboard steps plug into the existing `EmergencyCase` model.
+- **Commit 2 (done):** ambulance coordination, blood-bank availability, emergency resource
+  allocation — all plugged into the existing `EmergencyCase` model as new services + dashboard
+  steps.
 - **Commit 3:** AI emergency assistant, smart coordination, real-time communication, final
   polished dashboard.
