@@ -6,3 +6,5 @@ coverage
 npm-debug.log*
 .freebuff/
 vite-dev.log
+.env
+server/.env

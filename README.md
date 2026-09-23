@@ -2,8 +2,15 @@
 
 > **One emergency. One coordinated response.**
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/rodrixdcruz/naghealthgrid)
+
 Nagpur HealthGrid is an emergency healthcare coordination platform that organizes ambulance,
 hospital, resource, blood-bank and navigation workflows around a single emergency case.
+
+▶ **Try it live:** [https://healthgrid-frontend.onrender.com](https://healthgrid-frontend.onrender.com)
+(deployed on Render · emergency cases stored in a shared [Neon](https://neon.tech) Postgres database —
+cases created on one device appear on every other device. Free tier sleeps after inactivity;
+first load may take ~30 s.)
 
 ## The problem
 
@@ -89,6 +96,9 @@ All screenshots were captured from the running app with **simulated demo data** 
 | *Mobile case dashboard (390px).* | *Mobile landing (390px).* |
 
 ### Run it yourself
+
+**Live demo:** [healthgrid-frontend.onrender.com](https://healthgrid-frontend.onrender.com) ·
+API: [healthgrid-api.onrender.com/api/health](https://healthgrid-api.onrender.com/api/health)
 
 ```bash
 npm install && npm run dev   # → http://localhost:5173

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { EmergencyCase, Facility, TriageCategory } from '../models/types'
-import { getAllCases, haversineKm, formatDistance } from '../services/emergencyService'
+import { haversineKm, formatDistance } from '../services/emergencyService'
+import { useCloudCases } from '../hooks/useCloudCases'
 import { loadFleetState, isDispatchable } from '../services/ambulanceService'
 import { getHospitals } from '../services/hospitalService'
 import { hospitalReportedCapacity } from '../services/facilityService'
@@ -101,16 +102,11 @@ function BlackoutToggle() {
 }
 
 export function SurgePage() {
-  const [cases, setCases] = useState<EmergencyCase[]>([])
+  const cases = useCloudCases(6000) // cloud-aware: local + shared Neon pull
   const [fleetVersion, setFleetVersion] = useState(0)
 
   useEffect(() => {
-    const refresh = () => {
-      setCases(getAllCases())
-      setFleetVersion((v) => v + 1)
-    }
-    refresh()
-    const t = window.setInterval(refresh, 4000)
+    const t = window.setInterval(() => setFleetVersion((v) => v + 1), 4000)
     return () => window.clearInterval(t)
   }, [])
 

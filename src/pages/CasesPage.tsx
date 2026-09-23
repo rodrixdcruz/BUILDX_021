@@ -1,11 +1,10 @@
-import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { EmergencyCase } from '../models/types'
-import { getAllCases } from '../services/emergencyService'
+import { useCloudCases } from '../hooks/useCloudCases'
 import { PriorityBadge, EmptyState } from '../components/ui'
 
 export function CasesPage() {
-  const cases = useMemo(() => getAllCases(), [])
+  const cases = useCloudCases()
 
   return (
     <div className="page page--narrow">

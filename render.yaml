@@ -1,0 +1,46 @@
+# Render blueprint — Nagpur HealthGrid (frontend static site + Node API).
+# Deploy: Render Dashboard → New → Blueprint → pick this repo.
+# You set DATABASE_URL (Neon pooled connection string) as a secret env var.
+
+services:
+  # ---- API: Express + Neon Postgres (shared emergency-case store) ----
+  - type: web
+    name: healthgrid-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # paste your Neon pooled connection string
+      - key: ALLOWED_ORIGINS
+        sync: false          # e.g. https://healthgrid-frontend.onrender.com,http://localhost:5173
+
+  # ---- Frontend: Vite static site ----
+  - type: web
+    name: healthgrid-frontend
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      # SPA fallback: unknown paths serve index.html (no broken routes).
+      # Existing static files (/, /assets/*, /sw.js) still take precedence.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+    envVars:
+      - key: VITE_API_URL
+        sync: false          # e.g. https://healthgrid-api.onrender.com
+
+# Notes:
+# - The frontend calls the API directly via VITE_API_URL (build-time env var for
+#   a Vite SPA). Set it BEFORE the first deploy (or re-deploy after changing).
+# - CORS is handled by ALLOWED_ORIGINS on the API service — include the
+#   frontend's onrender.com URL there.

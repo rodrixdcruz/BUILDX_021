@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { EmergencyReportInput, BloodGroup } from '../models/types'
 import { EMERGENCY_TYPES, EMERGENCY_PRIORITIES } from '../constants/emergency'
 import { ALL_BLOOD_GROUPS } from '../services/bloodBankService'
-import { createEmergencyCase, saveCase } from '../services/emergencyService'
+import { nextCaseIdSmart, createEmergencyCaseWithId, saveCaseAndSync } from '../services/emergencyService'
 import { locateBrowser, LocationError } from '../services/locationService'
 import { DemoNotice } from '../components/ui'
 
@@ -71,11 +71,19 @@ export function EmergencyFormPage({ onCaseCreated }: { onCaseCreated: (id: strin
 
     setSubmitting(true)
     // Brief simulated dispatch latency so loading/transition states are real UX.
-    window.setTimeout(() => {
-      const created = createEmergencyCase(form)
-      saveCase(created)
-      setSubmitting(false)
-      onCaseCreated(created.id)
+    // Case id comes from the shared server counter when online (collision-free
+    // across devices); local counter offline — either way the case is saved
+    // locally first and mirrored to the API when the network allows.
+    window.setTimeout(async () => {
+      try {
+        const id = await nextCaseIdSmart()
+        const created = createEmergencyCaseWithId(id, form)
+        saveCaseAndSync(created)
+        setSubmitting(false)
+        onCaseCreated(created.id)
+      } catch {
+        setSubmitting(false)
+      }
     }, 900)
   }
 

@@ -31,6 +31,11 @@ self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
 
+  // Never intercept or cache API traffic — the shared case store (Neon-backed
+  // API) must always hit the network so devices stay in sync.
+  const url = new URL(req.url)
+  if (url.pathname.startsWith('/api/') || url.origin !== self.location.origin) return
+
   // SPA navigation: network first, fall back to the cached shell.
   if (req.mode === 'navigate') {
     event.respondWith(

@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import type { EmergencyCase, Hospital, GeoPoint, Ambulance, Facility } from '../models/types'
 import {
   getCase,
-  saveCase,
+  saveCaseAndSync,
   selectBestHospital,
   deriveLifecycle,
   addTimelineEntry,
@@ -96,7 +96,7 @@ export function CaseDashboardPage() {
     let updated: EmergencyCase = caseRecord
     for (const [key, labelText, detail] of needs) updated = addTimelineEntry(updated, key, labelText, detail)
     updated = { ...updated, lifecycle: derived }
-    saveCase(updated)
+    saveCaseAndSync(updated)
     setCaseRecord(updated)
   }, [caseRecord])
 
@@ -114,7 +114,7 @@ export function CaseDashboardPage() {
             ? { status: 'Selected', hospitalId: best.id, hospitalName: best.name }
             : { status: 'Unavailable', note: 'No hospital with emergency & ICU capacity in demo data.' },
         }
-        saveCase(updated)
+        saveCaseAndSync(updated)
         return updated
       })
     }, 1800)
@@ -128,7 +128,7 @@ export function CaseDashboardPage() {
       setCaseRecord((prev) => {
         if (!prev || prev.hospital.status !== 'Selected' || prev.bed.status !== 'Checking') return prev
         const updated: EmergencyCase = { ...prev, bed: { status: 'Available', category: 'ICU' } }
-        saveCase(updated)
+        saveCaseAndSync(updated)
         return updated
       })
     }, 1400)
@@ -142,7 +142,7 @@ export function CaseDashboardPage() {
       setCaseRecord((prev) => {
         if (!prev || prev.ambulance.status !== 'NotAssignedYet') return prev
         const updated = assignAmbulanceToCase(prev)
-        saveCase(updated)
+        saveCaseAndSync(updated)
         return updated
       })
       setFleet(loadFleetState())
@@ -159,7 +159,7 @@ export function CaseDashboardPage() {
       setCaseRecord((prev) => {
         if (!prev || prev.blood.status !== 'NotAssignedYet') return prev
         const updated = reserveBloodForCase(prev)
-        saveCase(updated)
+        saveCaseAndSync(updated)
         return updated
       })
     }, 1400)
@@ -221,10 +221,10 @@ export function CaseDashboardPage() {
 
   const persistUpdate = (updated: EmergencyCase) => {
     if (isOnline()) {
-      saveCase(updated)
+      saveCaseAndSync(updated)
     } else {
       queueCaseUpdate(updated)
-      saveCase(updated) // offline demo: local copy + queued action for sync
+      saveCaseAndSync(updated) // offline demo: local copy + queued action for sync
     }
     setCaseRecord(updated)
   }

@@ -1,5 +1,6 @@
 import type { EmergencyCase, EmergencyReportInput, SmsFallbackMessage } from '../models/types'
 import { createEmergencyCase, saveCase, getAllCases } from './emergencyService'
+import { mirrorCase } from './syncService'
 
 /**
  * Connectivity & offline outbox — Network Blackout Mode (Commit 3).
@@ -108,10 +109,12 @@ export function syncOutbox(): SyncResult {
       if (action.kind === 'create-case' && action.input) {
         const created = createEmergencyCase(action.input)
         saveCase(created)
+        mirrorCase(created) // push to shared Neon DB when the network is back
         result.caseIds.push(created.id)
         result.processed += 1
       } else if (action.kind === 'update-case' && action.caseRecord) {
         saveCase(action.caseRecord)
+        mirrorCase(action.caseRecord)
         result.caseIds.push(action.caseRecord.id)
         result.processed += 1
       } else {

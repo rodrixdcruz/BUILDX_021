@@ -6,6 +6,7 @@ import type {
   TriageCategory,
   TimelineEntry,
 } from '../models/types'
+import { allocateCaseId, bumpLocalCounter, mirrorCase } from './syncService'
 
 /**
  * Demo triage mapping — COORDINATION AID ONLY, never clinical triage.
@@ -82,6 +83,27 @@ export function nextCaseId(): string {
   return `NGP-${next}`
 }
 
+/**
+ * Allocates the next case id — server-side when the shared API is reachable
+ * (atomic counter in Neon Postgres, collision-free across devices), falling
+ * back to the local counter offline / when no API is configured.
+ */
+export async function nextCaseIdSmart(): Promise<string> {
+  const serverId = await allocateCaseId()
+  if (serverId) {
+    bumpLocalCounter(serverId)
+    return serverId
+  }
+  return nextCaseId()
+}
+
+/** Creates a new emergency case from a validated report. */
+export function createEmergencyCaseWithId(id: string, input: EmergencyReportInput): EmergencyCase {
+  const created = createEmergencyCase(input)
+  created.id = id
+  return created
+}
+
 /** Creates a new emergency case from a validated report. */
 export function createEmergencyCase(input: EmergencyReportInput): EmergencyCase {
   const now = new Date().toISOString()
@@ -110,6 +132,12 @@ export function createEmergencyCase(input: EmergencyReportInput): EmergencyCase 
     blood: { status: 'NotAssignedYet', note: 'Blood coordination begins after hospital matching.' },
     navigation: { status: 'NotAssignedYet', note: 'Coming in a later commit' },
   }
+}
+
+/** Persists a case locally AND mirrors it to the shared API when online. */
+export function saveCaseAndSync(caseRecord: EmergencyCase): void {
+  saveCase(caseRecord)
+  mirrorCase(caseRecord)
 }
 
 /** Persists a case (called right after creation and after every update). */
