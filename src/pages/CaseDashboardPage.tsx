@@ -26,6 +26,7 @@ import { LocationPanel } from '../components/LocationPanel'
 import { AllocationPanel } from '../components/AllocationPanel'
 import { mapsDeepLink } from '../constants/emergency'
 import { isOnline } from '../services/connectivityService'
+import { drivingRoute, fetchDriveTimes, type DrivingRoute } from '../services/routingService'
 
 /** Local order mirror of LIFECYCLE_STAGES for index lookups in the UI. */
 const LIFECYCLE_ORDER = [
@@ -39,6 +40,34 @@ const LIFECYCLE_ORDER = [
 ] as const
 
 /**
+ * Live driving distance/ETA for the Navigation step, fetched from OSRM when
+ * the patient's coordinates are known. Renders nothing until resolved; the
+ * straight-line Google-Maps link remains available regardless.
+ */
+function DrivingEta({ from, to }: { from: GeoPoint | null; to: GeoPoint }) {
+  const [route, setRoute] = useState<DrivingRoute | null>(null)
+  useEffect(() => {
+    if (!from) return
+    let cancelled = false
+    void drivingRoute(from, to).then((r) => {
+      if (!cancelled) setRoute(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [from, to])
+
+  if (!from || !route) return null
+  return (
+    <p className="faint" style={{ margin: '0.2rem 0 0' }}>
+      {route.source === 'osrm'
+        ? `≈ ${route.distanceKm} km · ~${route.durationMin} min driving (live road routing via OSRM — no traffic data)`
+        : `≈ ${route.distanceKm} km · ~${route.durationMin} min (offline straight-line estimate)`}
+    </p>
+  )
+}
+
+/**
  * Emergency case dashboard — the coordination heart of the MVP.
  * Workflow: report → hospital search → bed confirmation. Ambulance, blood
  * and navigation steps are scaffolded as "coming later" for Commits 2 & 3.
@@ -49,7 +78,7 @@ export function CaseDashboardPage() {
   const [notFound, setNotFound] = useState(false)
   const [point, setPoint] = useState<GeoPoint | null>(null)
   const [label, setLabel] = useState('')
-  const [, setFleet] = useState<Ambulance[]>([])
+  const [fleet, setFleet] = useState<Ambulance[]>([])
   const [now, setNow] = useState(Date.now())
   const [smsDraft, setSmsDraft] = useState<string | null>(null)
   const [smsCopied, setSmsCopied] = useState(false)
@@ -102,23 +131,48 @@ export function CaseDashboardPage() {
 
   // Simulated coordination pipeline (demo logic, clearly labelled in UI).
   // Stage 1: hospital search — runs while the case is in 'Searching'.
+  //
+  // Before scoring, we prefetch real OSRM drive times from the patient's
+  // coordinates to every ICU-capable hospital (cached; instant on repeat
+  // views). The 1.8s search window overlaps the fetch, so on a normal
+  // connection matching ranks hospitals by ROAD time; offline / blackout /
+  // API failure degrade silently to straight-line proximity. A 4s cap keeps
+  // a half-dead network from stalling the search — late results still fill
+  // the cache and improve the next case's matching.
   useEffect(() => {
     if (!caseRecord || caseRecord.hospital.status !== 'Searching') return
+    let cancelled = false
+
+    const DRIVE_TIME_CAP_MS = 4000
+    const rawFetch: Promise<Map<string, number> | null> = caseRecord.locationPoint
+      ? fetchDriveTimes(caseRecord.locationPoint, hospitals)
+      : Promise.resolve(null)
+    const driveTimes: Promise<Map<string, number> | null> = Promise.race([
+      rawFetch,
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), DRIVE_TIME_CAP_MS)),
+    ])
+
     const t1 = window.setTimeout(() => {
-      setCaseRecord((prev) => {
-        if (!prev || prev.hospital.status !== 'Searching') return prev
-        const best = selectBestHospital(prev, hospitals)
-        const updated: EmergencyCase = {
-          ...prev,
-          hospital: best
-            ? { status: 'Selected', hospitalId: best.id, hospitalName: best.name }
-            : { status: 'Unavailable', note: 'No hospital with emergency & ICU capacity in demo data.' },
-        }
-        saveCaseAndSync(updated)
-        return updated
+      void driveTimes.then((minutes) => {
+        if (cancelled) return
+        setCaseRecord((prev) => {
+          if (!prev || prev.hospital.status !== 'Searching') return prev
+          const best = selectBestHospital(prev, hospitals, minutes)
+          const updated: EmergencyCase = {
+            ...prev,
+            hospital: best
+              ? { status: 'Selected', hospitalId: best.id, hospitalName: best.name }
+              : { status: 'Unavailable', note: 'No hospital with emergency & ICU capacity in demo data.' },
+          }
+          saveCaseAndSync(updated)
+          return updated
+        })
       })
     }, 1800)
-    return () => window.clearTimeout(t1)
+    return () => {
+      cancelled = true
+      window.clearTimeout(t1)
+    }
   }, [caseRecord, caseRecord?.hospital.status, hospitals])
 
   // Stage 2: bed confirmation — starts once a hospital has been selected.
@@ -212,6 +266,17 @@ export function CaseDashboardPage() {
   const matchingBanks = c.requiredBloodGroup
     ? searchBloodBanks({ group: c.requiredBloodGroup, from: point, minUnits: 1 })
     : []
+
+  /**
+   * Simulated ambulance position for the live route line: the assigned
+   * unit's DEMO base coordinates while it is on the case. (No live GPS
+   * exists in the demo; the marker's movement along the route is pure
+   * animation paced by HospitalMap.)
+   */
+  const assignedUnit =
+    c.ambulance.status === 'Assigned' && c.ambulance.ambulanceId
+      ? fleet.find((a) => a.id === c.ambulance.ambulanceId) ?? null
+      : null
 
   // --- Commit 3: golden hour, lifecycle, overflow, SMS fallback ---
   const ghRemaining = remainingSeconds(c, now)
@@ -403,7 +468,7 @@ export function CaseDashboardPage() {
             <h3>Hospital <span className={`badge badge--${hospitalState === 'done' ? 'ok' : hospitalState === 'pending' ? 'pending' : 'danger'}`}>
               {c.hospital.status}
             </span></h3>
-            {c.hospital.status === 'Searching' && <p>Matching case against network hospitals (priority, distance, ICU capacity)…</p>}
+            {c.hospital.status === 'Searching' && <p>Matching case against network hospitals (priority, ICU capacity, live road times via OSRM)…</p>}
             {c.hospital.status === 'Selected' && selectedHospital && (
               <p>
                 <strong>{selectedHospital.name}</strong> · {selectedHospital.area} · 📞 {selectedHospital.contact}
@@ -494,9 +559,10 @@ export function CaseDashboardPage() {
             {navReady && selectedHospital ? (
               <>
                 <p>
-                  ESTIMATED ROUTE — {c.location} → {selectedHospital.name}. Straight-line demo estimate; no live
-                  traffic data.
+                  ESTIMATED ROUTE — {c.location} → {selectedHospital.name}. Road routing below;
+                  live traffic data not included.
                 </p>
+                <DrivingEta from={point ?? c.locationPoint ?? null} to={selectedHospital.location} />
                 <div className="step__link">
                   <a
                     className="btn btn--sm btn--ghost"
@@ -521,6 +587,8 @@ export function CaseDashboardPage() {
           selectedHospitalId={selectedHospital?.id}
           point={point}
           label={label}
+          ambulanceLocation={assignedUnit?.location ?? null}
+          routeCaseId={id ?? null}
           onLocationChange={(p, l) => {
             setPoint(p)
             setLabel(l)

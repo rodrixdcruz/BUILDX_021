@@ -93,3 +93,50 @@ export async function apiHealthy(): Promise<boolean> {
     return false
   }
 }
+
+// --- live updates (server-sent events) ---------------------------------------
+
+export interface CaseChangedEvent {
+  /** Case ID that changed, or '*' when the server could not determine it. */
+  id: string
+  /** Why the server announced it: 'notify' (LISTEN/NOTIFY) or 'poll'. */
+  reason: string
+  /** Server-side timestamp of the announcement. */
+  at: string
+}
+
+export type Unsubscribe = () => void
+
+/**
+ * Subscribe to live case-change events from /api/events via EventSource.
+ *
+ * - EventSource reconnects automatically with the server-provided `retry`
+ *   hint (4s); browser reconnects also fire `onopen` again, which callers
+ *   use to re-pull a full snapshot after any dropped chunk.
+ * - `onOpen` fires on every successful (re)connection — use it to trigger a
+ *   catch-up refresh, not just the first connect.
+ * - Returns an unsubscribe function; callers must call it on teardown.
+ * - Same API-absent / offline rules as every other call here: when the API
+ *   is not configured, the subscription is a no-op returning a no-op.
+ */
+export function subscribeCaseEvents(handlers: {
+  onCaseChanged: (e: CaseChangedEvent) => void
+  onOpen?: () => void
+}): Unsubscribe {
+  if (!apiConfigured() || typeof window === 'undefined' || typeof window.EventSource !== 'function') {
+    return () => {}
+  }
+  const es = new EventSource(`${BASE}/api/events`)
+  es.addEventListener('case', (ev) => {
+    try {
+      const data = JSON.parse((ev as MessageEvent).data) as CaseChangedEvent
+      handlers.onCaseChanged(data)
+    } catch {
+      handlers.onCaseChanged({ id: '*', reason: 'unparsed', at: new Date().toISOString() })
+    }
+  })
+  if (handlers.onOpen) es.onopen = () => handlers.onOpen?.()
+  return () => {
+    es.close()
+  }
+}

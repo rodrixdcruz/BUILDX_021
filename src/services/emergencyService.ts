@@ -168,13 +168,25 @@ export function getCase(id: string): EmergencyCase | null {
 }
 
 /**
- * Simulated hospital matching: picks the best hospital for a case based on
- * priority, emergency availability, relevant ICU capacity and proximity.
- * Marked clearly as DEMO logic — a real dispatch integration replaces this.
+ * Hospital matching: picks the best hospital for a case based on priority,
+ * emergency availability, ICU capacity and proximity.
+ *
+ * Proximity is REAL driving time when drive-time data is supplied (the
+ * dashboard prefetches OSRM durations during the search stage); otherwise it
+ * falls back to straight-line distance — offline, in tests, and whenever
+ * coordinates are missing. Deterministic in both modes: same inputs, same
+ * winner. Still a COORDINATION aid, not clinical advice — a real dispatch
+ * integration replaces this.
+ *
+ * Drive-time scoring: bonus = 30 − minutes, floored at 0 (like the distance
+ * bonus it replaces, so bed/priority weights keep their meaning). A hospital
+ * within ~2 minutes of the patient gets the full +30; beyond 30 minutes the
+ * drive no longer helps. Without coordinates or drive times the bonus is 0.
  */
 export function selectBestHospital(
   caseRecord: EmergencyCase,
   hospitals: import('../models/types').Hospital[],
+  driveMinutes?: Map<string, number> | null,
 ): import('../models/types').Hospital | null {
   const scored = hospitals
     .filter((h) => h.emergencyAvailable && h.beds.ICU && h.beds.ICU.available > 0)
@@ -183,12 +195,17 @@ export function selectBestHospital(
       if (caseRecord.priority === 'Emergency') score += 40
       score += h.beds.ICU!.available // safe: filtered above
       if (caseRecord.locationPoint && h.location) {
-        const d = haversineKm(caseRecord.locationPoint, h.location)
-        score += Math.max(0, 30 - d * 3) // closer is better
+        const minutes = driveMinutes?.get(h.id)
+        if (minutes !== undefined) {
+          score += Math.max(0, 30 - minutes) // closer BY ROAD is better
+        } else {
+          const d = haversineKm(caseRecord.locationPoint, h.location)
+          score += Math.max(0, 30 - d * 3) // straight-line fallback
+        }
       }
       return { h, score }
     })
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.h.id.localeCompare(b.h.id)) // deterministic ties
 
   return scored.length > 0 ? scored[0].h : null
 }

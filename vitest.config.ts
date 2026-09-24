@@ -8,5 +8,12 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Live-API contract checks live in routingService.smoke.test.ts and run
+    // separately via `npm run test:smoke` — never from this hermetic suite.
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/*.smoke.test.ts',
+    ],
   },
 })

@@ -1,4 +1,60 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  getThemeChoice,
+  setThemeChoice,
+  type ResolvedTheme,
+  subscribeTheme,
+} from '../services/themeService'
+
+const NEXT_CHOICE: Record<string, 'light' | 'dark' | 'system'> = {
+  light: 'dark',
+  dark: 'system',
+  system: 'light',
+}
+
+const CHOICE_LABEL: Record<string, string> = {
+  light: 'Light theme (click for dark)',
+  dark: 'Dark theme (click for system)',
+  system: 'System theme (click for light)',
+}
+
+/**
+ * Theme toggle button — cycles light → dark → system. Shows the RESOLVED
+ * theme (what you actually see), not just the choice; `system` is marked
+ * with an A so the manual override is discoverable.
+ */
+export function ThemeToggle() {
+  const [choice, setChoice] = useState(getThemeChoice)
+  const [resolved, setResolved] = useState<ResolvedTheme>('light')
+
+  useEffect(() => subscribeTheme(setResolved), [])
+
+  const icon = resolved === 'dark' ? '🌙' : '☀️'
+  const suffix = choice === 'system' ? 'A' : ''
+
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={() => {
+        const next = NEXT_CHOICE[choice]
+        setChoice(next)
+        setThemeChoice(next)
+      }}
+      aria-label={CHOICE_LABEL[choice]}
+      title={CHOICE_LABEL[choice]}
+    >
+      <span aria-hidden="true">{icon}</span>
+      <span className="sr-only">Theme: {choice === 'system' ? `system (${resolved})` : resolved}</span>
+      {suffix && (
+        <span className="theme-toggle__auto" aria-hidden="true">
+          {suffix}
+        </span>
+      )}
+    </button>
+  )
+}
 
 export function Header() {
   return (
@@ -18,9 +74,12 @@ export function Header() {
           <Link to="/cases">My Cases</Link>
           <Link to="/surge">Surge</Link>
         </nav>
-        <Link to="/emergency/new" className="header-emergency">
-          <span aria-hidden="true">🚨</span> Emergency
-        </Link>
+        <div className="site-header__actions">
+          <ThemeToggle />
+          <Link to="/emergency/new" className="header-emergency">
+            <span aria-hidden="true">🚨</span> Emergency
+          </Link>
+        </div>
       </div>
     </header>
   )

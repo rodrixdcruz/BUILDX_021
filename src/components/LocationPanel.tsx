@@ -1,8 +1,46 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { GeoPoint, Hospital } from '../models/types'
 import { locateBrowser, LocationError, areaCenter } from '../services/locationService'
+import { reverseGeocode, drivingRoute, type DrivingRoute } from '../services/routingService'
+import { HospitalMap } from './HospitalMap'
 import { NAGPUR_CENTER, NAGPUR_AREAS } from '../constants/emergency'
 import { haversineKm, formatDistance } from '../services/emergencyService'
+
+interface RouteInfo {
+  km: string
+  min: number
+  live: boolean
+}
+
+/**
+ * Fetches real driving distance/duration for one hospital via OSRM.
+ * Falls back silently to the straight-line estimate when offline.
+ */
+function useDrivingRoutes(point: GeoPoint | null, hospitals: Hospital[]): Map<string, RouteInfo> {
+  const [routes, setRoutes] = useState<Map<string, RouteInfo>>(new Map())
+
+  useEffect(() => {
+    if (!point || hospitals.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const entries = await Promise.all(
+        hospitals.map(async (h) => {
+          const r: DrivingRoute = await drivingRoute(point, h.location)
+          return [
+            h.id,
+            { km: formatDistance(r.distanceKm), min: r.durationMin, live: r.source === 'osrm' },
+          ] as const
+        }),
+      )
+      if (!cancelled) setRoutes(new Map(entries))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [point, hospitals])
+
+  return routes
+}
 
 interface Props {
   hospitals: Hospital[]
@@ -11,27 +49,33 @@ interface Props {
   point: GeoPoint | null
   label: string
   onLocationChange: (point: GeoPoint | null, label: string) => void
+  /**
+   * Simulated ambulance position — renders the dashed route polyline with
+   * an animated truck marker when a hospital is also selected.
+   */
+  ambulanceLocation?: GeoPoint | null
+  /** Case id for route-progress persistence (resume animation on re-open). */
+  routeCaseId?: string | null
 }
 
 /**
- * Map / location panel. Uses a lightweight schematic canvas (no paid map API)
- * plus Google Maps deep links. Supports browser geolocation and manual area
- * selection with graceful fallback when permission is denied.
+ * Map / location panel. Shows a real interactive OpenStreetMap (Leaflet)
+ * with patient + hospital markers, supports browser geolocation and manual
+ * area selection, and lists nearby hospitals with OSRM road distances.
+ * Falls back gracefully (offline tiles, denied geolocation, API hiccups).
  */
-export function LocationPanel({ hospitals, selectedHospitalId, point, label, onLocationChange }: Props) {
+export function LocationPanel({
+  hospitals,
+  selectedHospitalId,
+  point,
+  label,
+  onLocationChange,
+  ambulanceLocation,
+  routeCaseId,
+}: Props) {
   const [locating, setLocating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [manualArea, setManualArea] = useState('')
-
-  const SPAN = 0.09 // degrees of lat/lng shown in the schematic canvas
-
-  const project = useMemo(() => {
-    const center = point ?? NAGPUR_CENTER
-    return (p: GeoPoint) => ({
-      x: 50 + ((p.lng - center.lng) / SPAN) * 100,
-      y: 50 - ((p.lat - center.lat) / SPAN) * 100,
-    })
-  }, [point])
 
   useEffect(() => {
     if (manualArea) {
@@ -45,6 +89,11 @@ export function LocationPanel({ hospitals, selectedHospitalId, point, label, onL
     setError(null)
     try {
       const res = await locateBrowser()
+      // Upgrade the demo nearest-area label with a real Nominatim reverse
+      // geocode; on failure res.label (approx. area) is kept.
+      void reverseGeocode(res.point).then((place) => {
+        onLocationChange(res.point, place.label)
+      })
       onLocationChange(res.point, res.label)
     } catch (e) {
       setError(e instanceof LocationError ? e.message : 'Could not determine your location.')
@@ -54,58 +103,22 @@ export function LocationPanel({ hospitals, selectedHospitalId, point, label, onL
   }
 
   const visible = hospitals.slice(0, 8)
+  const routes = useDrivingRoutes(point, visible)
 
   return (
     <section className="card map-panel" aria-label="Location and map">
       <div className="section-head" style={{ marginBottom: '0.8rem' }}>
         <h2 style={{ fontSize: '1.05rem', margin: 0 }}>Location &amp; Map</h2>
-        <span className="faint">Schematic map — distances are straight-line estimates.</span>
+        <span className="faint">Distances via OSRM road routing when online; straight-line estimate offline.</span>
       </div>
 
-      <div
-        className="map-panel__canvas"
-        role="img"
-        aria-label="Schematic map showing patient and nearby hospital locations"
-      >
-        {hospitals.length === 0 && (
-          <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
-            <p className="muted">No hospitals to show on the map yet.</p>
-          </div>
-        )}
-
-        {visible.map((h) => {
-          const { x, y } = project(h.location)
-          return (
-            <div
-              key={h.id}
-              className={`map-dot map-dot--hospital ${h.id === selectedHospitalId ? 'map-dot--selected' : ''}`}
-              style={{ left: `${x}%`, top: `${y}%` }}
-            >
-              <span className="map-dot__pin" />
-              <span className="map-dot__label">{h.name}</span>
-            </div>
-          )
-        })}
-
-        {point && (
-          <div className="map-dot map-dot--patient" style={{ left: '50%', top: '50%' }}>
-            <span className="map-dot__pin" />
-            <span className="map-dot__label">You are here</span>
-          </div>
-        )}
-
-        <div className="map-legend">
-          <span>
-            <i style={{ background: '#2f80ed' }} /> Patient
-          </span>
-          <span>
-            <i style={{ background: 'var(--brand)' }} /> Hospitals
-          </span>
-          <span>
-            <i style={{ background: 'var(--emergency)' }} /> Selected
-          </span>
-        </div>
-      </div>
+      <HospitalMap
+        hospitals={visible}
+        selectedHospitalId={selectedHospitalId}
+        point={point}
+        ambulanceLocation={ambulanceLocation}
+        routeCaseId={routeCaseId}
+      />
 
       <div className="map-panel__side" style={{ marginTop: '0.9rem' }}>
         <div>
@@ -148,6 +161,9 @@ export function LocationPanel({ hospitals, selectedHospitalId, point, label, onL
             {error}
           </p>
         )}
+        <p className="faint" style={{ margin: 0, fontSize: '0.72rem' }}>
+          * = offline estimate. Live routes by OSRM; labels by OpenStreetMap Nominatim.
+        </p>
 
         {hospitals.length > 0 && (
           <div>
@@ -159,7 +175,15 @@ export function LocationPanel({ hospitals, selectedHospitalId, point, label, onL
                 <li key={h.id} className={h.id === selectedHospitalId ? 'selected' : ''}>
                   <span>{h.name}</span>
                   <span className="dist">
-                    {formatDistance(haversineKm(point ?? NAGPUR_CENTER, h.location))}
+                    {routes.get(h.id) ? (
+                      <>
+                        {routes.get(h.id)!.km}
+                        {' · ~'}{routes.get(h.id)!.min} min
+                        {!routes.get(h.id)!.live && ' *'}
+                      </>
+                    ) : (
+                      formatDistance(haversineKm(point ?? NAGPUR_CENTER, h.location))
+                    )}
                   </span>
                 </li>
               ))}

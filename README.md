@@ -55,6 +55,25 @@ data, no live ambulance GPS, and no government or hospital-network integration**
 verified APIs and are roadmap items, not features. Nothing here must be used for real medical
 decisions. For real emergencies in India call **112** / **108**.
 
+### Live (real) data sources that ARE integrated
+
+Two free, key-less OpenStreetMap-based services provide real data today:
+
+- **OSRM** — real **driving distance & duration** for the Navigation step, the location panel's
+  "Nearby hospitals" list, hospital detail pages, AND **hospital matching**:
+  `selectBestHospital` ranks candidates by live road time from the patient's coordinates
+  (fetched during the search stage, cached, capped at 4 s) instead of straight-line distance —
+  falling back to the haversine heuristic offline or when OSRM is unreachable.
+  Instances are configurable via `VITE_OSRM_BASE_URL` (comma-separated, tried in order, with a
+  60 s per-instance cool-off on failure); unset, it uses the public `router.project-osrm.org`
+  demo server as final safety net. Self-hosting instructions live in `.env.example`.
+- **Nominatim** (`nominatim.openstreetmap.org`) — real **reverse geocoding**: "use my location"
+  produces a genuine area label (road / suburb / city) instead of the nearest-demo-area guess.
+
+Both are cached in `localStorage`, rate-limit friendly (single-flight, ≤200 entries), and degrade
+gracefully to the original heuristics when unreachable. Everything else (beds, ambulances, blood
+stock) remains simulated.
+
 ## Implemented features
 
 - **Emergency request intake** — validated form (patient name, age, emergency type, 10-digit
@@ -65,19 +84,29 @@ decisions. For real emergencies in India call **112** / **108**.
   name-area search.
 - **Ambulance coordination** — 10-unit demo Nagpur fleet (ALS / BLS / PTV) with Available,
   Assigned, Busy and Offline states; deterministic dispatch matching (availability, ALS-for-
-  Emergency, proximity) with simulated ETA, persisted against the case.
+  Emergency, proximity) with simulated ETA, persisted against the case. Once assigned, the case
+  dashboard's map draws the unit's **route to the hospital as a dashed OSRM-geometry polyline
+  with an animated marker** — the movement is demo simulation (no live GPS), the road geometry
+  is real, and the animation progress is **persisted per case**: re-opening a dashboard resumes
+  the drive mid-route (or clamps to the destination if the traversal finished) instead of restarting.
+  Hospital pins cluster at low zoom; clicking a **cluster bubble opens a picker popup
+  listing the hidden hospitals by name** (with a "Zoom to area" action) instead of the default
+  spiderfy, so a hospital can be chosen — and its directions drawn — without zooming in.
 - **Blood-bank availability** — 8 demo Nagpur blood banks covering all 8 blood groups; search by
   group, unit count and distance; deterministic selection with a simulated reservation on the case.
 - **Emergency resource allocation** — deterministic, explainable coordination combining priority,
   type, location and resource availability into a plan whose reasons render on the dashboard.
 - **Emergency case dashboard** — live workflow steps (Hospital → Bed → Ambulance → Blood →
   Navigation) with status transitions, an allocation-explanation panel, and a location panel
-  (schematic map, browser geolocation with manual-area fallback, straight-line distances,
+  interactive Leaflet map with dark-tile theme, clustered hospital pins (with a tiny zoom/cluster
+  debug overlay in the corner), clickable directions
+  (blue OSRM route + live ETA panel), browser geolocation with manual-area fallback, and
   Google Maps deep links).
 - **Persistence** — cases and fleet state survive reloads via localStorage; every service is
   swap-ready for real APIs later.
 - **72 automated tests** (Vitest + Testing Library) covering services, matching, persistence and
-  the dashboard workflow.
+  the dashboard workflow, plus live-API contract smoke tests (`npm run test:smoke`) that guard
+  against OSRM/Nominatim response-shape changes.
 
 ## Demo
 
@@ -127,8 +156,9 @@ npm run dev        # http://localhost:5173
 | `npm run build` | Production build |
 | `npm run preview` | Preview the production build |
 | `npm run typecheck` | Strict TypeScript check |
-| `npm test` | Run all unit/integration tests once |
+| `npm test` | Run all unit/integration tests once (hermetic — no network) |
 | `npm run test:watch` | Watch mode |
+| `npm run test:smoke` | Live-API contract checks: one real request each to OSRM & Nominatim; skips when unreachable, fails on response-shape drift |
 
 ## Project structure
 

@@ -110,6 +110,56 @@ describe('selectBestHospital', () => {
     }))
     expect(selectBestHospital(c, none)).toBeNull()
   })
+
+  it('prefers a far hospital with a fast road route when drive times are given', () => {
+    const c = createEmergencyCase(base)
+    // H005 (KEM, 3 ICU beds) wins on proximity; H001 (GMCH, 6 ICU beds) is
+    // the straight-line runner-up on most scores. Drive times that make H001
+    // a 3-minute drive and H005 a 25-minute crawl flip the winner: bed gap
+    // (6 vs 3 = 3 pts) is smaller than the road-time gap (30-3 vs 30-25).
+    const h001 = DEMO_HOSPITALS.find((h) => h.id === 'H001')!
+    const h005 = DEMO_HOSPITALS.find((h) => h.id === 'H005')!
+    const drive = new Map([
+      ['H001', 3],
+      ['H005', 25],
+    ])
+    const withDrive = selectBestHospital(c, [h001, h005], drive)
+    expect(withDrive!.id).toBe('H001')
+
+    // Sanity: with NO drive times the same pair scores differently
+    // (H005's proximity + bed count must not already lose here).
+    const withoutDrive = selectBestHospital(c, [h001, h005])
+    expect(withoutDrive!.id).not.toBe('H001')
+  })
+
+  it('still respects ICU capacity and priority over drive time', () => {
+    const c = createEmergencyCase(base)
+    const [a, b] = DEMO_HOSPITALS.filter((h) => h.emergencyAvailable && h.beds.ICU).slice(0, 2)
+    // Huge bed gap cannot be overturned by a moderate drive-time gap.
+    const aBig = { ...a, beds: { ...a.beds, ICU: { ...a.beds.ICU!, available: 40 } } }
+    const bSmall = { ...b, beds: { ...b.beds, ICU: { ...b.beds.ICU!, available: 1 } } }
+    const drive = new Map([
+      [aBig.id, 25],
+      [bSmall.id, 5],
+    ])
+    const best = selectBestHospital(c, [aBig, bSmall], drive)
+    expect(best!.id).toBe(aBig.id) // 40 + (30-25) > 1 + (30-5)
+  })
+
+  it('falls back to straight-line scoring when the drive-time map misses a hospital', () => {
+    const c = createEmergencyCase(base)
+    const withDrive = selectBestHospital(c, DEMO_HOSPITALS, new Map()) // empty map
+    const withoutDrive = selectBestHospital(c, DEMO_HOSPITALS)
+    expect(withDrive!.id).toBe(withoutDrive!.id) // identical ranking
+  })
+
+  it('is deterministic under drive-time scoring (stable tie-break by id)', () => {
+    const c = createEmergencyCase(base)
+    const drive = new Map(DEMO_HOSPITALS.map((h) => [h.id, 10])) // all equal
+    const r1 = selectBestHospital(c, DEMO_HOSPITALS, drive)
+    const r2 = selectBestHospital(c, [...DEMO_HOSPITALS].reverse(), drive)
+    expect(r1!.id).toBe(r2!.id)
+  })
 })
 
 describe('geo helpers', () => {

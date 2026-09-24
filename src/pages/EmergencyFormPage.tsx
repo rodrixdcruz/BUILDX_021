@@ -4,6 +4,7 @@ import { EMERGENCY_TYPES, EMERGENCY_PRIORITIES } from '../constants/emergency'
 import { ALL_BLOOD_GROUPS } from '../services/bloodBankService'
 import { nextCaseIdSmart, createEmergencyCaseWithId, saveCaseAndSync } from '../services/emergencyService'
 import { locateBrowser, LocationError } from '../services/locationService'
+import { reverseGeocode } from '../services/routingService'
 import { DemoNotice } from '../components/ui'
 
 const emptyForm: EmergencyReportInput = {
@@ -54,6 +55,14 @@ export function EmergencyFormPage({ onCaseCreated }: { onCaseCreated: (id: strin
       setField('location', res.label)
       setField('locationPoint', res.point)
       setErrors((prev) => ({ ...prev, location: '' }))
+      // Upgrade to a real Nominatim reverse-geocoded label when online;
+      // silently keeps the approx-area label if the request fails.
+      void reverseGeocode(res.point).then((place) => {
+        if (place.source === 'nominatim') {
+          setField('location', place.label)
+          setField('locationPoint', res.point)
+        }
+      })
     } catch (err) {
       if (err instanceof LocationError && err.code === 'denied') {
         setLocationErr('Permission denied — please type your location below instead.')
